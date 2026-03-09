@@ -132,7 +132,7 @@ url = https://github.com/semgrep/semgrep-move-on-aptos.git
 
 [submodule "OSS/languages/move_on_sui/tree-sitter/semgrep-move-on-sui"]
 path = languages/move_on_sui/tree-sitter/semgrep-move-on-sui
-url = https://github.com/semgrep/semgrep-move-on-sui.git
+url = https://github.com/chargarlic/semgrep-move-on-sui.git
 
 [submodule "OSS/languages/circom/tree-sitter/semgrep-circom"]
 path = languages/circom/tree-sitter/semgrep-circom
