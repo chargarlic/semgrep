@@ -2849,7 +2849,7 @@ let map_semgrep_expression (env : env) (x : CST.semgrep_expression) =
 let map_enum_item (env : env) (x : CST.enum_item) =
   match x with
   | `Enum_defi (v1, v2, v3, v4) ->
-      let attrs =
+      let public_attrs =
         match v1 with
         | Some tok -> [ G.attr G.Public (token env tok) ]
         | None -> []
@@ -2862,6 +2862,7 @@ let map_enum_item (env : env) (x : CST.enum_item) =
         | None -> abilites
       in
       let enum_ = G.fake "enum" in
+      let attrs = G.attr G.EnumClass enum_ :: public_attrs in
       let type_params =
         match type_params with
         | Some params -> params
@@ -2981,8 +2982,9 @@ let map_source_file (env : env) (x : CST.source_file) =
             | Some params -> params
             | None -> (G.fake "", [], G.fake "")
           in
-          let ent = G.basic_entity ~tparams:type_params name in
           let enum_ = G.fake "enum" in
+          let attrs = [ G.attr G.EnumClass enum_ ] in
+          let ent = G.basic_entity ~tparams:type_params ~attrs name in
           let enum_def =
             {
               G.ckind = (G.Class, enum_);
