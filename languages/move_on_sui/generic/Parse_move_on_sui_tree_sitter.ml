@@ -1676,36 +1676,40 @@ and map_function_signature (env : env) attrs body
   in
   (fn_def, fn_ent)
 
-and map_enum_variant (env : env) (x : CST.variant) =
+and map_enum_variant (env : env) (x : CST.variant) : G.field =
   match x with
-  | `Ellips tok -> G.OrEllipsis (token env tok)
+  | `Ellips tok ->
+    let ellipsis = G.Ellipsis (token env tok) |> G.e in
+    G.F (G.ExprStmt (ellipsis, G.sc) |> G.s)
   | `Vari_id_opt_data_fields (v1, v2) ->
     let ident = str env v1 in
-    let orTypeElm =
+    let ee_body =
       match v2 with
-      | Some x -> G.OrConstructor (ident, map_datatype_fields_type env x)
-      | None -> G.OrEnum (ident, None)
+      | Some x -> Some (map_datatype_fields env x)
+      | None -> None
     in
-    orTypeElm
+    let ee_def = { G.ee_args = None; G.ee_body } in
+    let ent = G.basic_entity ident in
+    G.F (G.DefStmt (ent, G.EnumEntryDef ee_def) |> G.s)
 
 and map_enum_variants (env : env) ((v1, v2, v3, v4) : CST.enum_variants) :
-    G.type_definition_kind =
+    G.field list bracket =
   let lb = (* "{" *) token env v1 in
-  let orTypeElms =
+  let fields =
     List_.map
       (fun (v1, v2) ->
-        let orTypeElm = map_enum_variant env v1 in
-        let v2 = (* "," *) token env v2 in
-        orTypeElm)
+        let field = map_enum_variant env v1 in
+        let _comma = (* "," *) token env v2 in
+        field)
       v2
   in
-  let all_variants =
+  let all_fields =
     match v3 with
-    | Some x -> orTypeElms @ [ map_enum_variant env x ]
-    | None -> orTypeElms
+    | Some x -> fields @ [ map_enum_variant env x ]
+    | None -> fields
   in
   let rb = (* "}" *) token env v4 in
-  G.OrType all_variants
+  (lb, all_fields, rb)
 
 and map_arg_list (env : env) ((v1, v2, v3, v4) : CST.arg_list) =
   let lb = (* "(" *) token env v1 in
@@ -2847,26 +2851,34 @@ let map_enum_item (env : env) (x : CST.enum_item) =
   | `Enum_defi (v1, v2, v3, v4) ->
       let attrs =
         match v1 with
-        | Some tok -> [ G.KeywordAttr (G.Public, token env tok) ]
+        | Some tok -> [ G.attr G.Public (token env tok) ]
         | None -> []
       in
       let name, type_params, abilites = map_enum_signature env v2 in
-      let all_variants = map_enum_variants env v3 in
-      let _all_abilities =
-        (*todo deal with abilities*)
+      let variant_fields = map_enum_variants env v3 in
+      let all_abilities =
         match v4 with
         | Some x -> abilites @ map_postfix_ability_decls env x
         | None -> abilites
       in
-      let type_def = { G.tbody = all_variants } in
-      let ent =
+      let enum_ = G.fake "enum" in
+      let type_params =
+        match type_params with
+        | Some params -> params
+        | None -> (G.fake "", [], G.fake "")
+      in
+      let ent = G.basic_entity ~tparams:type_params ~attrs name in
+      let class_def =
         {
-          G.name = G.EN (G.Id (name, G.empty_id_info ()));
-          G.attrs;
-          G.tparams = type_params;
+          G.ckind = (G.Class, enum_);
+          cextends = [];
+          cimplements = all_abilities;
+          cmixins = [];
+          cparams = fb [];
+          cbody = variant_fields;
         }
       in
-      G.DefStmt (ent, G.TypeDef type_def) |> G.s
+      G.DefStmt (ent, G.ClassDef class_def) |> G.s
 
 let map_module_body (env : env) (x : CST.module_body) : G.stmt list =
   match x with
@@ -2964,15 +2976,24 @@ let map_source_file (env : env) (x : CST.source_file) =
           G.Partial (G.PartialDef (ent, G.ClassDef struct_def))
       | `Enum_sign x ->
           let name, type_params, abilites = map_enum_signature env x in
-          let ent =
+          let type_params =
+            match type_params with
+            | Some params -> params
+            | None -> (G.fake "", [], G.fake "")
+          in
+          let ent = G.basic_entity ~tparams:type_params name in
+          let enum_ = G.fake "enum" in
+          let enum_def =
             {
-              G.name = G.EN (G.Id (name, G.empty_id_info ()));
-              G.attrs = [];
-              G.tparams = type_params;
+              G.ckind = (G.Class, enum_);
+              cextends = [];
+              cimplements = abilites;
+              cmixins = [];
+              cparams = fb [];
+              cbody = (sc, [], sc);
             }
           in
-          let enum_def = { G.tbody = G.OrType [ G.OrEnum (name, None) ] } in
-          G.Partial (G.PartialDef (ent, G.TypeDef enum_def)))
+          G.Partial (G.PartialDef (ent, G.ClassDef enum_def)))
 
 (*****************************************************************************)
 (* Entry point *)
