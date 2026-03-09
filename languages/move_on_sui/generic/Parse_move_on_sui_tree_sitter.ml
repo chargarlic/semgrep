@@ -1676,15 +1676,17 @@ and map_function_signature (env : env) attrs body
   in
   (fn_def, fn_ent)
 
-and map_enum_variant (env : env) ((v1, v2) : CST.variant) =
-  let ident = str env v1 in
-  (* identifier *)
-  let orTypeElm =
-    match v2 with
-    | Some x -> G.OrConstructor (ident, map_datatype_fields_type env x)
-    | None -> G.OrEnum (ident, None)
-  in
-  orTypeElm
+and map_enum_variant (env : env) (x : CST.variant) =
+  match x with
+  | `Ellips tok -> G.OrEllipsis (token env tok)
+  | `Vari_id_opt_data_fields (v1, v2) ->
+    let ident = str env v1 in
+    let orTypeElm =
+      match v2 with
+      | Some x -> G.OrConstructor (ident, map_datatype_fields_type env x)
+      | None -> G.OrEnum (ident, None)
+    in
+    orTypeElm
 
 and map_enum_variants (env : env) ((v1, v2, v3, v4) : CST.enum_variants) :
     G.type_definition_kind =
@@ -2354,23 +2356,26 @@ and map_index_expression (env : env)
   in
   G.Seq array_acceses |> G.e
 
-and map_match_arm (env : env) ((v1, v2, v3, v4) : CST.match_arm) :
-    G.pattern * G.expr =
-  let patr = map_bind_list env v1 in
-  let patr_full =
-    match v2 with
-    | Some (v1, v2) ->
-        let v1 = (* "if" *) token env v1 in
-        let v2 = map_expression env v2 in
-        G.PatWhen (patr, v2)
-    | None -> patr
-  in
-  let v3 = (* "=>" *) token env v3 in
-  let expr = map_expression env v4 in
-  (patr_full, expr)
+and map_match_arm (env : env) (x : CST.match_arm) : G.case_and_body =
+  match x with
+  | `Ellips tok ->
+    G.CaseEllipsis (token env tok)
+  | `Bind_list_opt_if_exp_EQGT_exp (v1, v2, v3, v4) ->
+    let patr = map_bind_list env v1 in
+    let patr_full =
+      match v2 with
+      | Some (v1, v2) ->
+          let v1 = (* "if" *) token env v1 in
+          let v2 = map_expression env v2 in
+          G.PatWhen (patr, v2)
+      | None -> patr
+    in
+    let v3 = (* "=>" *) token env v3 in
+    let expr = map_expression env v4 in
+    G.case_of_pat_and_expr (patr_full, expr)
 
 and map_match_body (env : env) ((v1, v2, v3, v4) : CST.match_body) :
-    (G.pattern * G.expr) list =
+    G.case_and_body list =
   let v1 = (* "{" *) token env v1 in
   let match_arms =
     List_.map
@@ -2394,8 +2399,7 @@ and map_match_expression (env : env)
   let v2 = (* "(" *) token env v2 in
   let expr = map_expression env v3 in
   let v4 = (* ")" *) token env v4 in
-  let v5 = map_match_body env v5 in
-  let actions = v5 |> List_.map G.case_of_pat_and_expr in
+  let actions = map_match_body env v5 in
   let st = G.Switch (mat, Some (G.Cond expr), actions) |> G.s in
   G.stmt_to_expr st
 
