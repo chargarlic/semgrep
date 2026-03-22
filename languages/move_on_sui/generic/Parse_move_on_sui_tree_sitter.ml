@@ -44,6 +44,117 @@ let in_pattern env =
   | Pattern -> true
 
 (*****************************************************************************)
+(* Annotation/attribute helpers *)
+(*****************************************************************************)
+
+(* Convert a CST annotation_item to a G.attribute.
+   For simple names like test_only, produces NamedAttr.
+   For annotation lists like allow(unused), produces NamedAttr with args.
+   For key=value annotations, produces NamedAttr with the key name. *)
+let map_annotation_item_to_attr (env : env) (x : CST.annotation_item)
+    : G.attribute =
+  match x with
+  | `Choice_anno_expr x -> (
+      match x with
+      | `Anno_expr x -> (
+          match x with
+          | `Id tok ->
+              let name = H.str env tok in
+              G.NamedAttr (snd name, H2.name_of_id name, fb [])
+          | `Id_EQ_choice_COLONCOLON_module_access (v1, _v2, _v3) ->
+              (* key=value annotation: just preserve the key name *)
+              let name = H.str env v1 in
+              G.NamedAttr (snd name, H2.name_of_id name, fb []))
+      | `Anno_list (v1, _v2, _v3, _v4, _v5, _v6) ->
+          (* For annotation lists like allow(unused), lint(missing_syntax),
+             we produce a NamedAttr. We don't fully map the args since
+             the important thing is the attribute name being visible. *)
+          let name = H.str env v1 in
+          G.NamedAttr (snd name, H2.name_of_id name, fb []))
+  | `Ellips tok -> G.NamedAttr (H.token env tok, H2.name_of_id (H.str env tok), fb [])
+
+(* Convert a CST annotation (which is an "extra" in tree-sitter) to G.attribute list.
+   An annotation is: #[ item1, item2, ... ] *)
+let map_annotation_to_attrs (env : env) ((_hash_bracket, item, rest, _comma, _close) : CST.annotation)
+    : G.attribute list =
+  let first = map_annotation_item_to_attr env item in
+  let rest_attrs =
+    List_.map (fun (_comma_tok, item) -> map_annotation_item_to_attr env item) rest
+  in
+  first :: rest_attrs
+
+(* Extract annotation extras and sort by end position (line number).
+   Returns a list of (end_row, attributes). *)
+let extract_sorted_annotations (env : env) (extras : CST.extras)
+    : (int * G.attribute list) list =
+  let annots =
+    List_.filter_map
+      (fun (extra : CST.extra) ->
+        match extra with
+        | `Annotation (loc, annot) ->
+            let attrs = map_annotation_to_attrs env annot in
+            Some (loc.Tree_sitter_run.Loc.end_.Tree_sitter_run.Loc.row, attrs)
+        | _ -> None)
+      extras
+  in
+  (* Sort by position so we can match them to following definitions *)
+  List.sort (fun (r1, _) (r2, _) -> compare r1 r2) annots
+
+(* Get the start line of a statement from its first token *)
+let stmt_start_line (stmt : G.stmt) : int option =
+  let tok_opt =
+    match stmt.G.s with
+    | G.DefStmt ({ G.name = G.EN name; _ }, _) -> (
+        match name with
+        | G.Id ((_s, tok), _) -> Some tok
+        | _ -> None)
+    | _ -> None
+  in
+  match tok_opt with
+  | Some tok -> (
+      match Tok.loc_of_tok tok with
+      | Ok loc -> Some loc.pos.line
+      | Error _ -> None)
+  | None -> None
+
+(* Attach annotations to the definitions they precede.
+   An annotation on line N attaches to the next definition that starts after line N. *)
+let attach_annotations_to_stmts (annots : (int * G.attribute list) list)
+    (stmts : G.stmt list) : G.stmt list =
+  if annots = [] then stmts
+  else
+    let annots_ref = ref annots in
+    List_.map
+      (fun (stmt : G.stmt) ->
+        match stmt_start_line stmt with
+        | None -> stmt
+        | Some start_line ->
+            (* Collect all annotations that end before this stmt starts *)
+            let applicable = ref [] in
+            let remaining = ref [] in
+            List.iter
+              (fun ((end_row, attrs) as annot) ->
+                if end_row < start_line then
+                  applicable := attrs :: !applicable
+                else
+                  remaining := annot :: !remaining)
+              !annots_ref;
+            annots_ref := List.rev !remaining;
+            if !applicable = [] then stmt
+            else
+              let all_attrs =
+                List.rev !applicable |> List.concat
+              in
+              match stmt.G.s with
+              | G.DefStmt (ent, def) ->
+                  let ent' =
+                    { ent with G.attrs = all_attrs @ ent.G.attrs }
+                  in
+                  { stmt with G.s = G.DefStmt (ent', def) }
+              | _ -> stmt)
+      stmts
+
+(*****************************************************************************)
 (* Boilerplate converter *)
 (*****************************************************************************)
 (* This was started by copying tree-sitter-lang/semgrep-move/Boilerplate.ml *)
@@ -3007,13 +3118,30 @@ let map_source_file (env : env) (x : CST.source_file) =
 (* Entry point *)
 (*****************************************************************************)
 
+(* Recursively walk the AST and attach annotations to definitions inside modules *)
+let rec attach_annotations_in_program (annots : (int * G.attribute list) list)
+    (stmts : G.stmt list) : G.stmt list =
+  if annots = [] then stmts
+  else
+    List_.map
+      (fun (stmt : G.stmt) ->
+        match stmt.G.s with
+        | G.DefStmt (ent, G.ModuleDef { G.mbody = G.ModuleStruct (name, body) }) ->
+            let body' = attach_annotations_to_stmts annots body in
+            let def = G.ModuleDef { G.mbody = G.ModuleStruct (name, body') } in
+            { stmt with G.s = G.DefStmt (ent, def) }
+        | _ -> stmt)
+      stmts
+
 let parse file =
   H.wrap_parser
     (fun () -> Tree_sitter_move_on_sui.Parse.file !!file)
-    (fun cst _extras ->
+    (fun cst extras ->
       let env = { H.file; conv = H.line_col_to_pos file; extra = Target } in
       match map_source_file env cst with
-      | G.Pr xs -> xs
+      | G.Pr xs ->
+          let annots = extract_sorted_annotations env extras in
+          attach_annotations_in_program annots xs
       | _ -> failwith "not a program")
 
 let parse_expression_or_source_file str =
@@ -3023,9 +3151,18 @@ let parse_expression_or_source_file str =
 let parse_pattern str =
   H.wrap_parser
     (fun () -> parse_expression_or_source_file str)
-    (fun cst _extras ->
+    (fun cst extras ->
       let file = Fpath.v "<pattern>" in
       let env =
         { H.file; conv = H.line_col_to_pos_pattern str; extra = Pattern }
       in
-      map_source_file env cst)
+      let result = map_source_file env cst in
+      (* For patterns, also attach annotations *)
+      match result with
+      | G.Pr xs ->
+          let annots = extract_sorted_annotations env extras in
+          G.Pr (attach_annotations_in_program annots xs)
+      | G.Ss xs ->
+          let annots = extract_sorted_annotations env extras in
+          G.Ss (attach_annotations_to_stmts annots xs)
+      | other -> other)
