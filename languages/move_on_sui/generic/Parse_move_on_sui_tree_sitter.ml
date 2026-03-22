@@ -171,6 +171,12 @@ let map_ability (env : env) (x : CST.ability) : G.type_ =
       in
       G.ty_builtin cap
   | `Ellips tok -> (* "..." *) G.TyEllipsis (token env tok) |> G.t
+  | `Semg_meta_ellips tok ->
+      let ident = str env tok in
+      G.ty_builtin ident
+  | `Semg_meta_var tok ->
+      let ident = str env tok in
+      G.ty_builtin ident
 
 let map_num (num : G.ident) : G.literal =
   let num_str, _ = num in

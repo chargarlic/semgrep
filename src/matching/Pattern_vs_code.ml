@@ -2242,7 +2242,21 @@ and m_type_ a b =
   | G.TyPointer (a0, a1), B.TyPointer (b0, b1) ->
       m_tok a0 b0 >>= fun () -> m_type_ a1 b1
   | G.TyRef (a0, a1), B.TyRef (b0, b1) ->
-      m_tok a0 b0 >>= fun () -> m_type_ a1 b1
+      (* For TyRef, ensure mutability matches exactly:
+       * pattern `&T` should NOT match code `&mut T` and vice versa.
+       * The Mutable keyword attr is checked via m_attributes (less_is_ok)
+       * above, but less_is_ok allows `&T` (no attrs) to match `&mut T`
+       * (has Mutable attr). We add an explicit check here. *)
+      let has_mutable attrs =
+        List.exists
+          (fun attr ->
+            match attr with
+            | G.KeywordAttr (G.Mutable, _) -> true
+            | _ -> false)
+          attrs
+      in
+      if has_mutable a.t_attrs <> has_mutable b.t_attrs then fail ()
+      else m_tok a0 b0 >>= fun () -> m_type_ a1 b1
   | G.TyQuestion (a1, a2), B.TyQuestion (b1, b2) ->
       m_type_ a1 b1 >>= fun () -> m_tok a2 b2
   | G.TyRest (a1, a2), B.TyRest (b1, b2) ->
@@ -3608,8 +3622,18 @@ and _m_list__m_type_ (xsa : G.type_ list) (xsb : G.type_ list) =
 and m_list__m_type_any_order (xsa : G.type_ list) (xsb : G.type_ list) =
   (* TODO? filter existing ellipsis?
    * let _has_ellipsis, xsb = has_ellipsis_and_filter_ellipsis xsb in *)
+  (* Handle metavar ellipsis ($...X) in type lists: treat as matching
+   * the full list, similar to how less_is_ok works. This enables
+   * patterns like `struct $NAME has $...ABILITIES { ... }` to match
+   * any combination of abilities. *)
+  let is_metavar_ellipsis_type t =
+    match t.G.t with
+    | G.TyN (G.Id ((s, _tok), _)) when Mvar.is_metavar_ellipsis s -> true
+    | _ -> false
+  in
+  let xsa_filtered = List.filter (fun t -> not (is_metavar_ellipsis_type t)) xsa in
   (* always implicit ... *)
-  m_list_in_any_order ~less_is_ok:true m_type_ xsa xsb
+  m_list_in_any_order ~less_is_ok:true m_type_ xsa_filtered xsb
 
 and m_list__m_class_parent (xsa : G.class_parent list)
     (xsb : G.class_parent list) =
