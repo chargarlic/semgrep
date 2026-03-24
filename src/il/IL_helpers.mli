@@ -33,6 +33,9 @@ val lvar_of_instr_opt : IL.instr -> IL.name option
 (** If the given instruct stores its result in an lvalue of the form
     x.o_1. ... .o_N, then it is [Some x], otherwise it is [None]. *)
 
+val rlvals_of_instr : IL.instr -> IL.lval list
+(** The lvalues that occur in the RHS of an instruction. *)
+
 val rlvals_of_node : IL.node_kind -> IL.lval list
 (** The lvalues that occur in the RHS of a node. *)
 

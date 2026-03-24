@@ -1490,8 +1490,21 @@ let check_tainted_instr env instr : Taints.t * S.shape * Lval_env.t =
   match sanitizer_pms with
   (* See NOTE [is_sanitizer] *)
   | _ :: _ ->
-      (* TODO: We should check that taint and sanitizer(s) are unifiable. *)
-      (Taints.empty, Bot, env.lval_env)
+      (* If any sanitizer has by_side_effect, clean lvals from the instruction
+       * arguments. This handles patterns like `assert!(x > 0)` where x should
+       * be sanitized after the assert. *)
+      let has_side_effect =
+        List.exists
+          (fun (m : R.taint_sanitizer TM.t) -> m.spec.sanitizer_by_side_effect)
+          sanitizer_pms
+      in
+      let lval_env =
+        if has_side_effect then
+          let lvals = IL_helpers.rlvals_of_instr instr in
+          List.fold_left Lval_env.clean env.lval_env lvals
+        else env.lval_env
+      in
+      (Taints.empty, Bot, lval_env)
   | [] ->
       let taints_instr, rhs_shape, lval_env = check_instr instr.i in
       let taints, lval_env =
