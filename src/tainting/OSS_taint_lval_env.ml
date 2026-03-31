@@ -21,6 +21,7 @@ module Var_env = Dataflow_var_env
 module VarSet = Var_env.VarSet
 module VarMap = Var_env.VarMap
 module NameMap = IL.NameMap
+module NameSet = IL.NameSet
 open Shape_and_sig.Shape
 module Shape = OSS_taint_shape
 
@@ -43,6 +44,9 @@ let limits_tags = Logs_.create_tags [ "bad"; "limits" ]
 type t = {
   tainted : cell NameMap.t;
       (** Lvalues that are tainted, it is only meant to track l-values of the form x.a_1. ... . a_N. *)
+  sanitized_by_side_effect : NameSet.t;
+      (** Lvalues that have been sanitized by a by-side-effect sanitizer (e.g. assert!).
+          Source pattern matching is suppressed for these lvals, preventing re-tainting. *)
   control : T.taints;
       (** Taints propagated via the flow of control (rather than the flow of data). *)
   taints_waiting_to_be_propagated : T.taints VarMap.t;
@@ -67,6 +71,7 @@ type env = t
 let empty =
   {
     tainted = NameMap.empty;
+    sanitized_by_side_effect = NameSet.empty;
     control = Taints.empty;
     taints_waiting_to_be_propagated = VarMap.empty;
     pending_propagation_dests = VarSet.empty;
@@ -143,6 +148,8 @@ let union le1 le2 =
   in
   {
     tainted;
+    sanitized_by_side_effect =
+      NameSet.inter le1.sanitized_by_side_effect le2.sanitized_by_side_effect;
     control = Taints.union le1.control le2.control;
     taints_waiting_to_be_propagated =
       Var_env.varmap_union Taints.union le1.taints_waiting_to_be_propagated
@@ -205,6 +212,7 @@ let check_tainted_lvals_limit tainted new_var =
 let add_shape var offset new_taints new_shape
     ({
        tainted;
+       sanitized_by_side_effect;
        control;
        taints_waiting_to_be_propagated;
        pending_propagation_dests;
@@ -238,6 +246,7 @@ let add_shape var offset new_taints new_shape
               Shape.update_offset_and_unify new_taints new_shape offset
                 opt_var_ref)
             tainted;
+        sanitized_by_side_effect;
         control;
         taints_waiting_to_be_propagated;
         pending_propagation_dests;
@@ -347,6 +356,7 @@ let find_taint_to_be_propagated prop_var env =
 let clean
     ({
        tainted;
+       sanitized_by_side_effect;
        control;
        taints_waiting_to_be_propagated;
        pending_propagation_dests;
@@ -366,12 +376,27 @@ let clean
               | None -> None
               | Some var_ref -> Some (Shape.clean_cell offsets var_ref))
             tainted;
+        sanitized_by_side_effect;
         control;
         taints_waiting_to_be_propagated;
         pending_propagation_dests;
         (* THINK: Should we clean propagations before they are executed? *)
         var_was_touched;
       }
+
+let mark_sanitized lval_env lval =
+  match normalize_lval lval with
+  | None -> lval_env
+  | Some (var, _offsets) ->
+      { lval_env with
+        sanitized_by_side_effect =
+          NameSet.add var lval_env.sanitized_by_side_effect }
+
+let is_sanitized lval_env lval =
+  match normalize_lval lval with
+  | None -> false
+  | Some (var, _offsets) ->
+      NameSet.mem var lval_env.sanitized_by_side_effect
 
 let filter_tainted pred ({ tainted; _ } as lval_env) =
   let tainted = tainted |> NameMap.filter (fun var _cell -> pred var) in
@@ -386,6 +411,7 @@ let get_control_taints { control; _ } = control
 let equal
     {
       tainted = tainted1;
+      sanitized_by_side_effect = san1;
       control = control1;
       taints_waiting_to_be_propagated = _;
       pending_propagation_dests = _;
@@ -393,12 +419,14 @@ let equal
     }
     {
       tainted = tainted2;
+      sanitized_by_side_effect = san2;
       control = control2;
       taints_waiting_to_be_propagated = _;
       pending_propagation_dests = _;
       var_was_touched = _;
     } =
   NameMap.equal equal_cell tainted1 tainted2
+  && NameSet.equal san1 san2
   (* NOTE: We ignore 'taints_waiting_to_be_propagated' and 'pending_propagation_dests',
    * we just care how they affect 'tainted'. *)
   && Taints.equal control1 control2
@@ -425,6 +453,7 @@ let equal_by_lval { tainted = tainted1; _ } { tainted = tainted2; _ } lval =
 let to_string
     {
       tainted;
+      sanitized_by_side_effect;
       control;
       taints_waiting_to_be_propagated;
       pending_propagation_dests;
@@ -436,6 +465,8 @@ let to_string
      NameMap.fold
        (fun dn v s -> s ^ IL.str_of_name dn ^ ":" ^ show_cell v ^ " ")
        tainted "[TAINTED]")
+  ^ (if NameSet.is_empty sanitized_by_side_effect then ""
+     else "[SANITIZED] " ^ NameSet.show sanitized_by_side_effect)
   ^ (if Taints.is_empty control then ""
      else "[CONTROL] " ^ T.show_taints control)
   ^ (if VarMap.is_empty taints_waiting_to_be_propagated then ""

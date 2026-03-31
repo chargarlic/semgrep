@@ -130,6 +130,13 @@ val clean : env -> IL.lval -> env
     clean the entire array! This seems drastic but it should help reducing FPs.
  *)
 
+val mark_sanitized : env -> IL.lval -> env
+(** Mark an lvalue as permanently sanitized by a by-side-effect sanitizer.
+    Source pattern matching will be suppressed for this lval. *)
+
+val is_sanitized : env -> IL.lval -> bool
+(** Check whether an lvalue has been marked as sanitized by a by-side-effect sanitizer. *)
+
 val filter_tainted : (IL.name -> bool) -> env -> env
 val add_control_taints : env -> Taint.taints -> env
 val get_control_taints : env -> Taint.taints
