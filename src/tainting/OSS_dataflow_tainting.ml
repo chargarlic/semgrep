@@ -853,6 +853,11 @@ let check_orig_sources_propagators_sinks env orig thing ~incoming_taints shape =
   (taints, lval_env)
 
 let find_lval_taint_sources env incoming_taints lval =
+  (* If this lval was sanitized by a by-side-effect sanitizer (e.g. assert!),
+   * skip source pattern matching entirely to prevent re-tainting. *)
+  if Lval_env.is_sanitized env.lval_env lval then
+    (Taints.empty, env.lval_env)
+  else
   let taints_of_pms env = taints_of_matches env ~incoming:incoming_taints in
   let source_pms = lval_is_source env lval in
   (* Partition sources according to the value of `by-side-effect:`,
@@ -1490,9 +1495,10 @@ let check_tainted_instr env instr : Taints.t * S.shape * Lval_env.t =
   match sanitizer_pms with
   (* See NOTE [is_sanitizer] *)
   | _ :: _ ->
-      (* If any sanitizer has by_side_effect, clean lvals from the instruction
-       * arguments. This handles patterns like `assert!(x > 0)` where x should
-       * be sanitized after the assert. *)
+      (* If any sanitizer has by_side_effect, mark lvals from the instruction
+       * as permanently sanitized. This prevents source re-detection at
+       * subsequent uses of the lval, fixing the issue where pattern-based
+       * sources override Lval_env.clean. *)
       let has_side_effect =
         List.exists
           (fun (m : R.taint_sanitizer TM.t) -> m.spec.sanitizer_by_side_effect)
@@ -1501,7 +1507,10 @@ let check_tainted_instr env instr : Taints.t * S.shape * Lval_env.t =
       let lval_env =
         if has_side_effect then
           let lvals = IL_helpers.rlvals_of_instr instr in
-          List.fold_left Lval_env.clean env.lval_env lvals
+          let lval_env =
+            List.fold_left Lval_env.clean env.lval_env lvals
+          in
+          List.fold_left Lval_env.mark_sanitized lval_env lvals
         else env.lval_env
       in
       (Taints.empty, Bot, lval_env)
