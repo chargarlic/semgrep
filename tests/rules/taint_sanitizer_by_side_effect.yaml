@@ -1,0 +1,14 @@
+rules:
+  - id: taint-sanitizer-by-side-effect
+    languages: [python]
+    message: Tainted data reaches sink without sanitization
+    mode: taint
+    severity: ERROR
+    pattern-sources:
+      - pattern: input(...)
+    pattern-sanitizers:
+      - pattern: assert ...
+        by-side-effect: true
+    pattern-sinks:
+      - pattern: sink($SINK)
+        focus-metavariable: $SINK
