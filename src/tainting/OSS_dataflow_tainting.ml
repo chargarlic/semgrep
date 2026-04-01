@@ -1047,6 +1047,10 @@ and check_tainted_lval_aux env (lval : IL.lval) :
         | `Sanitized ->
             (* See NOTE [lval/sanitized] *)
             (`Sanitized, S.Bot)
+        | _ when Lval_env.is_sanitized lval_env lval ->
+            (* Lval was sanitized by a by-side-effect sanitizer (e.g. assert!).
+             * Treat as sanitized to suppress assignment-based taint. *)
+            (`Sanitized, S.Bot)
         | (`Clean | `None | `Tainted _) as sub_xtaint ->
             let xtaint', shape =
               (* THINK: Should we just use 'Sig.find_in_shape' directly here ?
