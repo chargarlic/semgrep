@@ -307,7 +307,11 @@ let map_literal_value (env : env) (x : CST.literal_value) : G.literal =
   | `Hex_str_lit tok ->
       G.String (map_hex_string env tok) (* pattern "x\"[0-9a-fA-F]*\"" *)
   | `Byte_str_lit tok -> G.String (map_byte_string env tok)
-(* pattern "b\"(\\\\.|[^\\\\\"])*\"" *)
+  | `Str_lit tok ->
+      let s, t = str env tok in
+      let new_len = String.length s - 2 in
+      let content = String.sub s 1 new_len in
+      G.String (G.fake "\"", (content, t), G.fake "\"")
 
 let map_module_id (env : env) (x : CST.anon_choice_num_lit_a33e50c) : G.ident =
   match x with
