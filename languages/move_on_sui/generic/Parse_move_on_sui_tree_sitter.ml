@@ -3048,6 +3048,11 @@ let map_module_definition (env : env) ((v1, v2, v3) : CST.module_definition) =
   let def = G.ModuleDef { mbody = G.ModuleStruct (None, mod_body) } in
   G.DefStmt (ent, def) |> G.s
 
+let map_module_extension_definition (env : env)
+    ((v1, v2) : CST.module_extension_definition) =
+  let _extend = (* "extend" *) token env v1 in
+  map_module_definition env v2
+
 let map_semgrep_statement (env : env) (xs : CST.semgrep_statement) =
   let stmt_list_list =
     xs
@@ -3075,7 +3080,11 @@ let map_semgrep_statement (env : env) (xs : CST.semgrep_statement) =
 
 let map_source_file (env : env) (x : CST.source_file) =
   match x with
-  | `Rep_module_defi xs -> G.Pr (xs |> List_.map (map_module_definition env))
+  | `Rep_choice_module_ext_defi xs ->
+      G.Pr (xs |> List_.map (fun x ->
+        match x with
+        | `Module_ext_defi x -> map_module_extension_definition env x
+        | `Module_defi x -> map_module_definition env x))
   | `Semg_exp x -> map_semgrep_expression env x
   | `Semg_stmt x -> map_semgrep_statement env x
   | `Semg_part x -> (
