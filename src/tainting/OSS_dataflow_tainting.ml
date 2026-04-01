@@ -689,6 +689,33 @@ let fix_poly_taint_with_field lval xtaint =
       | [] -> xtaint)
 
 (*****************************************************************************)
+(* Helpers for extracting lvals from original AST expressions *)
+(*****************************************************************************)
+
+(* Extract IL lvals from the original AST expression stored in an instruction's
+ * `iorig`. This is needed for by-side-effect sanitizers: when `assert!(x > 0)`
+ * is decomposed in IL to `_tmp = (x > 0); Assert(_tmp)`, we need to extract
+ * `x` from the original AST, not just `_tmp` from the IL instruction. *)
+let lvals_of_orig orig =
+  let names = ref [] in
+  let visitor =
+    object (_self)
+      inherit [_] G.iter_no_id_info as super
+
+      method! visit_expr env expr =
+        (match expr.G.e with
+        | G.N (G.Id (id, id_info)) ->
+            let var = AST_to_IL.var_of_id_info id id_info in
+            names := { IL.base = Var var; rev_offset = [] } :: !names
+        | _ -> ());
+        super#visit_expr env expr
+    end
+  in
+  let any = any_of_orig orig in
+  visitor#visit_any () any;
+  !names
+
+(*****************************************************************************)
 (* Tainted *)
 (*****************************************************************************)
 
@@ -1510,11 +1537,18 @@ let check_tainted_instr env instr : Taints.t * S.shape * Lval_env.t =
       in
       let lval_env =
         if has_side_effect then
-          let lvals = IL_helpers.rlvals_of_instr instr in
+          (* Extract lvals from the ORIGINAL AST expression (iorig), not just
+           * the IL instruction. This is critical because IL decomposes
+           * `assert!(x > 0)` into `_tmp = (x > 0); Assert(_tmp)`, and
+           * rlvals_of_instr on Assert only returns [_tmp]. By using iorig
+           * we get `x` from the full `assert!(x > 0)` expression. *)
+          let lvals_from_orig = lvals_of_orig instr.iorig in
+          let lvals_from_il = IL_helpers.rlvals_of_instr instr in
+          let all_lvals = lvals_from_orig @ lvals_from_il in
           let lval_env =
-            List.fold_left Lval_env.clean env.lval_env lvals
+            List.fold_left Lval_env.clean env.lval_env all_lvals
           in
-          List.fold_left Lval_env.mark_sanitized lval_env lvals
+          List.fold_left Lval_env.mark_sanitized lval_env all_lvals
         else env.lval_env
       in
       (Taints.empty, Bot, lval_env)
