@@ -3118,17 +3118,56 @@ let map_source_file (env : env) (x : CST.source_file) =
 (* Entry point *)
 (*****************************************************************************)
 
-(* Recursively walk the AST and attach annotations to definitions inside modules *)
+(* Check if an attribute is test_only *)
+let is_test_only_attr (attr : G.attribute) : bool =
+  match attr with
+  | G.NamedAttr (_, G.Id (("test_only", _), _), _) -> true
+  | _ -> false
+
+(* Propagate module-level attributes (like test_only) to all DefStmt entries
+   in a module body. This ensures that #[test_only] on a module applies to
+   every function/struct/const inside it. *)
+let propagate_module_attrs_to_body (module_attrs : G.attribute list)
+    (body : G.stmt list) : G.stmt list =
+  (* Only propagate test_only for now *)
+  let propagated = List.filter is_test_only_attr module_attrs in
+  if propagated = [] then body
+  else
+    List_.map
+      (fun (stmt : G.stmt) ->
+        match stmt.G.s with
+        | G.DefStmt (ent, def) ->
+            (* Only add if not already present *)
+            let dominated =
+              List.exists (fun a -> is_test_only_attr a) ent.G.attrs
+            in
+            if dominated then stmt
+            else
+              let ent' =
+                { ent with G.attrs = propagated @ ent.G.attrs }
+              in
+              { stmt with G.s = G.DefStmt (ent', def) }
+        | _ -> stmt)
+      body
+
+(* Recursively walk the AST and attach annotations to definitions inside modules.
+   First attaches annotations to top-level stmts (including module defs), then
+   propagates module-level #[test_only] to all inner definitions. *)
 let rec attach_annotations_in_program (annots : (int * G.attribute list) list)
     (stmts : G.stmt list) : G.stmt list =
   if annots = [] then stmts
   else
+    (* First, attach annotations to top-level stmts (modules get their attrs) *)
+    let stmts = attach_annotations_to_stmts annots stmts in
+    (* Then, walk into modules: pass remaining annots to body AND propagate
+       module-level test_only to all inner definitions *)
     List_.map
       (fun (stmt : G.stmt) ->
         match stmt.G.s with
         | G.DefStmt (ent, G.ModuleDef { G.mbody = G.ModuleStruct (name, body) }) ->
             let body' = attach_annotations_to_stmts annots body in
-            let def = G.ModuleDef { G.mbody = G.ModuleStruct (name, body') } in
+            let body'' = propagate_module_attrs_to_body ent.G.attrs body' in
+            let def = G.ModuleDef { G.mbody = G.ModuleStruct (name, body'') } in
             { stmt with G.s = G.DefStmt (ent, def) }
         | _ -> stmt)
       stmts
