@@ -2479,8 +2479,13 @@ and map_match_arm (env : env) (x : CST.match_arm) : G.case_and_body =
   match x with
   | `Ellips tok ->
     G.CaseEllipsis (token env tok)
-  | `Bind_list_opt_if_exp_EQGT_exp (v1, v2, v3, v4) ->
-    let patr = map_bind_list env v1 in
+  | `Choice_bind_list_opt_if_exp_EQGT_exp (v1, v2, v3, v4) ->
+    let patr = match v1 with
+      | `Bind_list x -> map_bind_list env x
+      | `Lit_value x ->
+          let lit = map_literal_value env x in
+          G.PatLiteral lit
+    in
     let patr_full =
       match v2 with
       | Some (v1, v2) ->
