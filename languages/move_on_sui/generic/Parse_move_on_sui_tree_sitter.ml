@@ -1375,15 +1375,13 @@ let rec transpile_let_bind (env : env) (left : G.pattern) (right : G.expr) :
       | G.Special (G.Spread, tok) ->
           [ G.F (G.Special (G.Spread, tok) |> G.e |> G.exprstmt) ]
       | _ ->
-          Log.err (fun m ->
-              m "Unsupported pattern in let binding %s \n\n \n %s "
-                (G.show_pattern left) (G.show_expr right));
-          failwith "Unsupported pattern in let binding")
+          (* Gracefully handle unsupported patterns: emit as OtherStmt *)
+          let stmt = G.OtherStmt (G.OS_Todo, [ G.E right ]) |> G.s in
+          [ G.F stmt ])
   | _ ->
-      Log.err (fun m ->
-          m "Unsupported pattern in let binding %s \n\n \n %s "
-            (G.show_pattern left) (G.show_expr right));
-      failwith "Unsupported pattern in let binding"
+      (* Gracefully handle unsupported patterns: emit as OtherStmt *)
+      let stmt = G.OtherStmt (G.OS_Todo, [ G.E right ]) |> G.s in
+      [ G.F stmt ]
 
 let map_use_declaration (env : env) ((v1, v2, v3, v4) : CST.use_declaration) :
     G.directive list =
