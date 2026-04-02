@@ -1753,27 +1753,20 @@ and map_macro_signature (env : env)
   (attrs, ident, type_parameters, function_parameters, ret_type)
 
 and map_function_signature (env : env) attrs body
-    ((v1, v2, v3, v4, v5, v6, v7) : CST.function_signature) =
-  let mod_one =
-    match v1 with
-    | Some x -> [ map_modifier env x ]
-    | None -> []
-  in
-  let mod_two =
-    match v2 with
-    | Some x -> [ map_modifier env x ]
-    | None -> []
-  in
-  let fun_ = (* "fun" *) token env v3 in
-  let name : G.ident = (* identifier *) str env v4 in
+    ((v1, v2, v3, v4, v5, v6) : CST.function_signature) =
+  let modifiers = List_.map (map_modifier env) v1 in
+  let mod_one = match modifiers with x :: _ -> [ x ] | [] -> [] in
+  let mod_two = match modifiers with _ :: rest -> rest | [] -> [] in
+  let fun_ = (* "fun" *) token env v2 in
+  let name : G.ident = (* identifier *) str env v3 in
   let type_parameters =
-    match v5 with
+    match v4 with
     | Some x -> Some (map_type_parameters env x)
     | None -> None
   in
-  let function_parameters = map_function_parameters env v6 in
+  let function_parameters = map_function_parameters env v5 in
   let ret_type =
-    v7
+    v6
     |> Option.map (fun (_, v2) -> map_type_ env v2)
     |> Option.value ~default:(G.TyTuple (sc, [], sc) |> G.t)
   in
@@ -2202,8 +2195,11 @@ and map_expression (env : env) (x : CST.expression) : G.expr =
           G.stmt_to_expr ret_st
       | `Abort_exp (v1, v2) ->
           let v1 = (* "abort" *) str env v1 in
-          let v2 = map_expression env v2 in
-          G.Call (G.N (H2.name_of_id v1) |> G.e, fb [ G.Arg v2 ]) |> G.e
+          let args = match v2 with
+            | Some x -> [ G.Arg (map_expression env x) ]
+            | None -> []
+          in
+          G.Call (G.N (H2.name_of_id v1) |> G.e, fb args) |> G.e
       | `Assign_exp (v1, v2, v3) ->
           let lhs = map_unary_expression env v1 in
           let v2 = (* "=" *) token env v2 in
